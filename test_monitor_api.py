@@ -14,7 +14,7 @@ test_image = "/Users/hoangtrung/Documents/doancheating/head_pose/faceset/Image10
 
 # Request data
 data = {
-    "user_id": 123,
+    "student_id": "SV001",  # Mã học sinh
     "exam_period_id": 456,
     "submission_id": 789
 }

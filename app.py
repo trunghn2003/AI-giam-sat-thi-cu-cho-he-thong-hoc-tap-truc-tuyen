@@ -107,7 +107,7 @@ def monitor_exam() -> Any:
     Detects violations and saves to S3 + MySQL if any.
     
     Required fields:
-    - user_id: Student's user ID (bigint)
+    - student_id: Student ID (mã học sinh)
     - exam_period_id: Exam period ID (bigint) 
     - submission_id: Exam submission ID (bigint)
     - image: Photo of student (base64 or multipart)
@@ -117,9 +117,34 @@ def monitor_exam() -> Any:
     """
     try:
         # Extract required fields
-        user_id = _extract_field("user_id", required=True, field_type=int)
+        student_id = _extract_field("student_id", required=True, field_type=str)
         exam_period_id = _extract_field("exam_period_id", required=True, field_type=int)
         submission_id = _extract_field("submission_id", required=True, field_type=int)
+        
+        # Query MySQL to get user_id from users table where employee_code = student_id
+        try:
+            conn = mysql_service._get_connection()
+            cursor = conn.cursor()
+            
+            cursor.execute(
+                "SELECT id FROM users WHERE employee_code = %s LIMIT 1",
+                (student_id,)
+            )
+            result = cursor.fetchone()
+            cursor.close()
+            
+            if not result:
+                return jsonify({
+                    "error": f"Student with employee_code '{student_id}' not found in system"
+                }), 404
+            
+            user_id = result['id']
+            LOGGER.info(f"Found user_id {user_id} for student_id '{student_id}'")
+            
+        except Exception as e:
+            LOGGER.error(f"Failed to lookup user_id for student_id '{student_id}': {e}")
+            return jsonify({"error": "Database error while looking up student"}), 500
+                
     except ValueError as exc:
         return jsonify({"error": str(exc)}), 400
     
@@ -193,6 +218,7 @@ def monitor_exam() -> Any:
             return jsonify({
                 "status": "violation_detected",
                 "violation_id": violation_id,
+                "student_id": student_id,
                 "violation_type": violation_type,
                 "severity": severity,
                 "confidence": confidence,
@@ -207,6 +233,7 @@ def monitor_exam() -> Any:
             response_result = convert_numpy_to_json_serializable(response_result)
             
             return jsonify({
+                "student_id": student_id,
                 "status": "clear",
                 "message": "No violations detected",
                 "detection_result": response_result
@@ -653,4 +680,4 @@ def _persist_annotated_image(image) -> str:
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
-    app.run(host="0.0.0.0", port=8000, debug=False)
+    app.run(host="0.0.0.0", port=8001, debug=False)
