@@ -86,9 +86,17 @@ class FaceRecognizer:
         self,
         name: str,
         images_bgr: Iterable[np.ndarray],
+        student_id: Optional[str] = None,
+        email: Optional[str] = None,
     ) -> dict:
         """
         Add a new identity to the database using provided images.
+
+        Args:
+            name: Student's full name
+            images_bgr: List of BGR images containing the student's face
+            student_id: Student ID number
+            email: Student's email address
 
         Returns:
             Dictionary describing ingestion statistics.
@@ -118,7 +126,12 @@ class FaceRecognizer:
         if not embeddings:
             raise ValueError("No valid faces detected in supplied images")
 
-        count = self.database.add_person(clean_name, embeddings)
+        count = self.database.add_person(
+            clean_name, 
+            embeddings,
+            student_id=student_id,
+            email=email
+        )
 
         return {
             "name": clean_name,

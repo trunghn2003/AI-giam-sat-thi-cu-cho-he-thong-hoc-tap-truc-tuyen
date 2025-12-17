@@ -5,6 +5,7 @@ Flask entry-point exposing the cheating detection pipeline as a REST API.
 from __future__ import annotations
 
 import logging
+import re
 import uuid
 from pathlib import Path
 from typing import Any, Dict
@@ -82,9 +83,147 @@ def _extract_image_payload(payload: Dict[str, Any] | None = None):
     )
 
 
+@app.route("/api/students/register", methods=["POST"])
+def register_student() -> Any:
+    """
+    Register a new student in the face recognition database.
+    
+    Required fields:
+    - name: Student's full name
+    - student_id: Student ID number (unique)
+    - images: List of face images (at least 3 recommended)
+    
+    Optional fields:
+    - email: Student's email address
+    """
+    try:
+        # Extract and validate student info
+        name = _extract_name()
+        student_id = _extract_student_id()
+        email = _extract_email()  # Optional
+        
+        # Check if student_id already exists
+        existing_name = PIPELINE.face_recognizer.database.find_by_student_id(student_id)
+        if existing_name:
+            return jsonify({
+                "error": f"Student ID '{student_id}' already registered under name '{existing_name}'"
+            }), 400
+        
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    
+    images = _extract_images()
+    if not images:
+        return jsonify({"error": "At least one image is required"}), 400
+    
+    if len(images) < 3:
+        LOGGER.warning("Only %d images provided. Recommend at least 3 for better accuracy.", len(images))
+
+    try:
+        summary = PIPELINE.face_recognizer.add_person(
+            name, 
+            images,
+            student_id=student_id,
+            email=email
+        )
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    except Exception:  # pragma: no cover - defensive
+        LOGGER.exception("Failed to register student")
+        return jsonify({"error": "Internal error while registering student"}), 500
+
+    summary["student_id"] = student_id
+    summary["email"] = email
+    summary["total_students"] = len(PIPELINE.face_recognizer.database.people)
+    return jsonify(summary), 201
+
+
+@app.route("/api/students", methods=["GET"])
+def get_all_students() -> Any:
+    """
+    Get list of all registered students.
+    
+    Returns:
+        List of students with their metadata (name, student_id, email, registration_date)
+    """
+    try:
+        students = PIPELINE.face_recognizer.database.get_all_students()
+        return jsonify({
+            "total": len(students),
+            "students": students
+        }), 200
+    except Exception:  # pragma: no cover - defensive
+        LOGGER.exception("Failed to retrieve students")
+        return jsonify({"error": "Internal error while retrieving students"}), 500
+
+
+@app.route("/api/students/<string:identifier>", methods=["DELETE"])
+def delete_student(identifier: str) -> Any:
+    """
+    Delete a student from the database.
+    
+    Args:
+        identifier: Can be either student name or student_id
+    
+    Returns:
+        Success message or error
+    """
+    try:
+        # Try to find by student_id first
+        name = PIPELINE.face_recognizer.database.find_by_student_id(identifier)
+        if not name:
+            # If not found, treat identifier as name
+            name = identifier
+        
+        success = PIPELINE.face_recognizer.database.delete_person(name)
+        if not success:
+            return jsonify({"error": f"Student '{identifier}' not found"}), 404
+        
+        return jsonify({
+            "message": f"Student '{name}' deleted successfully",
+            "total_students": len(PIPELINE.face_recognizer.database.people)
+        }), 200
+    except Exception:  # pragma: no cover - defensive
+        LOGGER.exception("Failed to delete student")
+        return jsonify({"error": "Internal error while deleting student"}), 500
+
+
+@app.route("/api/students/<string:identifier>", methods=["GET"])
+def get_student_info(identifier: str) -> Any:
+    """
+    Get information about a specific student.
+    
+    Args:
+        identifier: Can be either student name or student_id
+    
+    Returns:
+        Student information including metadata
+    """
+    try:
+        # Try to find by student_id first
+        name = PIPELINE.face_recognizer.database.find_by_student_id(identifier)
+        if not name:
+            # If not found, treat identifier as name
+            name = identifier
+        
+        if not PIPELINE.face_recognizer.database.has_person(name):
+            return jsonify({"error": f"Student '{identifier}' not found"}), 404
+        
+        metadata = PIPELINE.face_recognizer.database.get_student_info(name)
+        return jsonify({
+            "name": name,
+            **metadata
+        }), 200
+    except Exception:  # pragma: no cover - defensive
+        LOGGER.exception("Failed to retrieve student info")
+        return jsonify({"error": "Internal error while retrieving student info"}), 500
+
+
+# Keep old endpoint for backward compatibility
 @app.route("/api/faces", methods=["POST"])
 def add_face() -> Any:
     """
+    [DEPRECATED] Use /api/students/register instead.
     Register a new identity in the face database.
     """
     try:
@@ -112,25 +251,58 @@ def _extract_name() -> str:
         payload = request.get_json() or {}
         name = payload.get("name")
         if name:
-            return name
+            return name.strip()
     if request.form:
         name = request.form.get("name")
         if name:
-            return name
+            return name.strip()
     raise ValueError("Missing 'name' field")
+
+
+def _extract_student_id() -> str:
+    """Extract and validate student ID from request."""
+    if request.is_json:
+        payload = request.get_json() or {}
+        student_id = payload.get("student_id")
+        if student_id:
+            return student_id.strip()
+    if request.form:
+        student_id = request.form.get("student_id")
+        if student_id:
+            return student_id.strip()
+    raise ValueError("Missing 'student_id' field")
+
+
+def _extract_email() -> str:
+    """Extract and validate email from request (optional)."""
+    email = None
+    if request.is_json:
+        payload = request.get_json() or {}
+        email = payload.get("email")
+    elif request.form:
+        email = request.form.get("email")
+    
+    if email:
+        email = email.strip()
+        # Basic email validation
+        email_pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
+        if not re.match(email_pattern, email):
+            raise ValueError(f"Invalid email format: {email}")
+    
+    return email or ""
 
 
 def _extract_images():
     images = []
     if request.files:
         file_list = request.files.getlist("images") or request.files.getlist("file")
-        for item in file_list:
+        for idx, item in enumerate(file_list):
             if not item or not item.filename:
                 continue
             try:
                 images.append(decode_image_from_bytes(item.read()))
             except ValueError as exc:
-                LOGGER.warning("Failed to decode uploaded image: %s", exc)
+                LOGGER.warning("Failed to decode uploaded image %d (%s): %s", idx, item.filename, exc)
     elif request.is_json:
         payload: Dict[str, Any] = request.get_json() or {}
         base64_images = payload.get("images")
@@ -138,11 +310,11 @@ def _extract_images():
         if single and not base64_images:
             base64_images = [single]
         if base64_images:
-            for data in base64_images:
+            for idx, data in enumerate(base64_images):
                 try:
                     images.append(decode_image_from_base64(data))
                 except ValueError as exc:
-                    LOGGER.warning("Failed to decode base64 image: %s", exc)
+                    LOGGER.warning("Failed to decode base64 image %d: %s", idx, exc)
     return images
 
 
