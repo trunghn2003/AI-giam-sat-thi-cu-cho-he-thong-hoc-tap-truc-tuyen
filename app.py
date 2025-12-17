@@ -219,6 +219,77 @@ def get_student_info(identifier: str) -> Any:
         return jsonify({"error": "Internal error while retrieving student info"}), 500
 
 
+@app.route("/api/students/verify/before", methods=["POST"])
+def verify_student() -> Any:
+    """
+    Verify student identity before allowing exam entry.
+    
+    Required fields:
+    - student_id: Student ID number to verify
+    - image: Photo of the student (base64 or multipart)
+    
+    Optional fields:
+    - threshold: Custom verification threshold (0.0-1.0)
+    
+    Returns:
+        {
+            "verified": true/false,
+            "student_id": "SV001",
+            "name": "Student Name",
+            "confidence": 0.85,
+            "message": "Identity verified"
+        }
+    """
+    try:
+        student_id = _extract_student_id()
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    
+    # Extract optional threshold
+    threshold = None
+    if request.is_json:
+        payload = request.get_json() or {}
+        threshold = payload.get("threshold")
+    elif request.form:
+        threshold_str = request.form.get("threshold")
+        if threshold_str:
+            try:
+                threshold = float(threshold_str)
+            except ValueError:
+                return jsonify({"error": "Invalid threshold value"}), 400
+    
+    # Validate threshold range
+    if threshold is not None and (threshold < 0.0 or threshold > 1.0):
+        return jsonify({"error": "Threshold must be between 0.0 and 1.0"}), 400
+    
+    # Extract image
+    images = _extract_images()
+    if not images:
+        return jsonify({"error": "Image is required for verification"}), 400
+    
+    if len(images) > 1:
+        LOGGER.warning("Multiple images provided for verification. Using the first one.")
+    
+    image = images[0]
+    
+    try:
+        result = PIPELINE.face_recognizer.verify_student(
+            student_id=student_id,
+            image_bgr=image,
+            verification_threshold=threshold
+        )
+        
+        # Return appropriate status code
+        if result["verified"]:
+            return jsonify(result), 200
+        else:
+            return jsonify(result), 401  # Unauthorized
+            
+    except Exception:  # pragma: no cover - defensive
+        LOGGER.exception("Failed to verify student")
+        return jsonify({"error": "Internal error during verification"}), 500
+
+
 # Keep old endpoint for backward compatibility
 @app.route("/api/faces", methods=["POST"])
 def add_face() -> Any:

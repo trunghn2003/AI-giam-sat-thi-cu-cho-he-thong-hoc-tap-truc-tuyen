@@ -139,3 +139,118 @@ class FaceRecognizer:
             "faces_detected": face_hits,
             "embeddings_used": count,
         }
+
+    def verify_student(
+        self,
+        student_id: str,
+        image_bgr: np.ndarray,
+        verification_threshold: Optional[float] = None,
+    ) -> dict:
+        """
+        Verify if the face in the image matches the registered student.
+
+        Args:
+            student_id: Student ID to verify against
+            image_bgr: BGR image containing the student's face
+            verification_threshold: Minimum similarity score to pass verification
+                                   (defaults to self.match_threshold)
+
+        Returns:
+            Dictionary with verification result:
+            {
+                "verified": bool,
+                "student_id": str,
+                "name": str or None,
+                "confidence": float,
+                "message": str,
+                "face_detected": bool
+            }
+        """
+        threshold = verification_threshold if verification_threshold is not None else self.match_threshold
+        
+        # Find student name by student_id
+        student_name = self.database.find_by_student_id(student_id)
+        if not student_name:
+            return {
+                "verified": False,
+                "student_id": student_id,
+                "name": None,
+                "confidence": 0.0,
+                "message": f"Student ID '{student_id}' not found in database",
+                "face_detected": False
+            }
+
+        # Get registered embedding for this student
+        if not self.database.has_person(student_name):
+            return {
+                "verified": False,
+                "student_id": student_id,
+                "name": student_name,
+                "confidence": 0.0,
+                "message": f"Student '{student_name}' found but no face data available",
+                "face_detected": False
+            }
+
+        # Detect face in provided image
+        image = ensure_uint8(image_bgr)
+        rgb = bgr_to_rgb(image)
+        faces = self._face_app.get(rgb)
+        
+        if not faces:
+            return {
+                "verified": False,
+                "student_id": student_id,
+                "name": student_name,
+                "confidence": 0.0,
+                "message": "No face detected in the provided image",
+                "face_detected": False,
+                "face_count": 0
+            }
+
+        if len(faces) > 1:
+            LOGGER.warning(f"Multiple faces detected during verification: {len(faces)} faces")
+            return {
+                "verified": False,
+                "student_id": student_id,
+                "name": student_name,
+                "confidence": 0.0,
+                "message": f"Multiple faces detected ({len(faces)} faces). Only one person allowed for verification",
+                "face_detected": True,
+                "face_count": len(faces)
+            }
+
+        # Get embedding from detected face
+        embedding = getattr(faces[0], "embedding", None)
+        if embedding is None:
+            return {
+                "verified": False,
+                "student_id": student_id,
+                "name": student_name,
+                "confidence": 0.0,
+                "message": "Failed to extract face embedding from image",
+                "face_detected": True
+            }
+
+        # Compare with registered student
+        matched_name, similarity = self.database.identify(embedding)
+        
+        # Verify if matched name is the expected student and similarity is above threshold
+        verified = (matched_name == student_name) and (similarity >= threshold)
+        
+        if verified:
+            message = f"Identity verified: {student_name}"
+        elif matched_name != student_name:
+            message = f"Face matches '{matched_name}' instead of '{student_name}'"
+        else:
+            message = f"Similarity score {similarity:.3f} below threshold {threshold:.3f}"
+
+        return {
+            "verified": verified,
+            "student_id": student_id,
+            "name": student_name,
+            "matched_name": matched_name,
+            "confidence": float(similarity),
+            "threshold": float(threshold),
+            "message": message,
+            "face_detected": True
+        }
