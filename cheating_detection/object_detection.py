@@ -29,7 +29,7 @@ class SuspiciousObjectDetector:
         self,
         model_path: Path,
         watched_classes: Optional[Sequence[str]] = None,
-        confidence_threshold: float = 0.25,
+        confidence_threshold: float = 0.6,
     ) -> None:
         self.model_path = Path(model_path)
         if not self.model_path.exists():
