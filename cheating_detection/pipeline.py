@@ -19,6 +19,8 @@ from .gaze import EyeGazeEstimator
 from .head_pose import HeadPoseClassifier, HeadPoseThresholds
 from .object_detection import SuspiciousObjectDetector
 from .utils import ensure_uint8
+from .visualization import annotate_detections
+import numpy as np
 
 
 @dataclass
@@ -130,13 +132,20 @@ class CheatingDetectionPipeline:
 
         status = "clear" if not flags else "attention"
 
-        return {
+        # Prepare result dict for annotation
+        result_dict = {
             "status": status,
             "faces": enriched_faces,
             "objects": objects,
             "flags": flags,
             "face_count": face_count,
         }
+
+        # Create annotated image with all detections drawn
+        annotated_image = annotate_detections(image.copy(), result_dict)
+        result_dict["annotated_image"] = annotated_image
+
+        return result_dict
 
 
 def load_default_pipeline() -> CheatingDetectionPipeline:

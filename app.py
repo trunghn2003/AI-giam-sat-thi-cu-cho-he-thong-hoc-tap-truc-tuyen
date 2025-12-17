@@ -7,10 +7,12 @@ from __future__ import annotations
 import logging
 import re
 import uuid
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict
 
 import cv2
+import numpy as np
 from flask import Flask, jsonify, request, url_for
 
 from cheating_detection import annotate_detections, load_default_pipeline
@@ -18,6 +20,21 @@ from cheating_detection.utils import (
     decode_image_from_base64,
     decode_image_from_bytes,
 )
+from database import mysql_service, s3_service
+
+
+def convert_numpy_to_json_serializable(obj):
+    """Recursively convert numpy arrays to lists for JSON serialization."""
+    if isinstance(obj, np.ndarray):
+        return obj.tolist()
+    elif isinstance(obj, dict):
+        return {k: convert_numpy_to_json_serializable(v) for k, v in obj.items()}
+    elif isinstance(obj, (list, tuple)):
+        return [convert_numpy_to_json_serializable(item) for item in obj]
+    elif isinstance(obj, (np.integer, np.floating)):
+        return obj.item()
+    else:
+        return obj
 
 LOGGER = logging.getLogger(__name__)
 
@@ -81,6 +98,123 @@ def _extract_image_payload(payload: Dict[str, Any] | None = None):
         "Unsupported request payload. Provide 'file' via form-data "
         "or 'image_base64' within a JSON body."
     )
+
+
+@app.route("/api/monitor", methods=["POST"])
+def monitor_exam() -> Any:
+    """
+    Monitor student during exam - called every 5 seconds from frontend.
+    Detects violations and saves to S3 + MySQL if any.
+    
+    Required fields:
+    - user_id: Student's user ID (bigint)
+    - exam_period_id: Exam period ID (bigint) 
+    - submission_id: Exam submission ID (bigint)
+    - image: Photo of student (base64 or multipart)
+    
+    Returns:
+        Detection result with violation status
+    """
+    try:
+        # Extract required fields
+        user_id = _extract_field("user_id", required=True, field_type=int)
+        exam_period_id = _extract_field("exam_period_id", required=True, field_type=int)
+        submission_id = _extract_field("submission_id", required=True, field_type=int)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    
+    # Extract image
+    images = _extract_images()
+    if not images:
+        return jsonify({"error": "Image is required for monitoring"}), 400
+    
+    image = images[0]
+    
+    try:
+        # Run detection pipeline
+        result = PIPELINE.analyze(image)
+        detected_at = datetime.now()
+        
+        # Check if there are any violations
+        has_violation = result.get("status") != "clear"
+        flags = result.get("flags", [])
+        
+        if has_violation and flags:
+            # Determine violation type and severity
+            violation_type, severity = _classify_violation(result, flags)
+            
+            # Calculate confidence (average from detection results)
+            confidence = _calculate_confidence(result)
+            
+            # Get annotated image (with bounding boxes, landmarks, gaze arrows)
+            annotated_image = result.get("annotated_image", image)
+            
+            # Upload annotated image to S3 (only if violation)
+            image_url, image_key = s3_service.upload_violation_image(
+                image_bgr=annotated_image,
+                exam_period_id=exam_period_id,
+                submission_id=submission_id,
+                user_id=user_id,
+                violation_type=violation_type
+            )
+            
+            # Remove annotated_image and convert numpy arrays to lists
+            detection_data = {k: v for k, v in result.items() if k != "annotated_image"}
+            detection_data = convert_numpy_to_json_serializable(detection_data)
+            
+            # Save violation to MySQL
+            violation_id = mysql_service.insert_violation(
+                exam_period_id=exam_period_id,
+                submission_id=submission_id,
+                user_id=user_id,
+                violation_type=violation_type,
+                severity=severity,
+                confidence=confidence,
+                image_url=image_url,
+                image_key=image_key,
+                detection_data=detection_data,
+                detected_at=detected_at
+            )
+            
+            # Update violation summary
+            if violation_id:
+                mysql_service.update_violation_summary(
+                    submission_id=submission_id,
+                    user_id=user_id,
+                    exam_period_id=exam_period_id,
+                    severity=severity,
+                    detected_at=detected_at
+                )
+            
+            # Prepare response (remove annotated_image and convert numpy)
+            response_result = {k: v for k, v in result.items() if k != "annotated_image"}
+            response_result = convert_numpy_to_json_serializable(response_result)
+            
+            return jsonify({
+                "status": "violation_detected",
+                "violation_id": violation_id,
+                "violation_type": violation_type,
+                "severity": severity,
+                "confidence": confidence,
+                "flags": flags,
+                "image_url": image_url,
+                "detected_at": detected_at.isoformat(),
+                "detection_result": response_result
+            }), 200
+        else:
+            # No violation - return success without saving
+            response_result = {k: v for k, v in result.items() if k != "annotated_image"}
+            response_result = convert_numpy_to_json_serializable(response_result)
+            
+            return jsonify({
+                "status": "clear",
+                "message": "No violations detected",
+                "detection_result": response_result
+            }), 200
+            
+    except Exception as exc:  # pragma: no cover - defensive
+        LOGGER.exception("Monitoring failed")
+        return jsonify({"error": "Internal error during monitoring"}), 500
 
 
 @app.route("/api/students/register", methods=["POST"])
@@ -315,6 +449,121 @@ def add_face() -> Any:
 
     summary["total_identities"] = len(PIPELINE.face_recognizer.database.people)
     return jsonify(summary), 201
+
+
+def _extract_field(field_name: str, required: bool = True, field_type: type = str):
+    """
+    Extract a field from request (JSON or form-data).
+    
+    Args:
+        field_name: Name of the field to extract
+        required: Whether the field is required
+        field_type: Type to convert the field to (str, int, float)
+    
+    Returns:
+        Field value converted to field_type
+    
+    Raises:
+        ValueError: If required field is missing or type conversion fails
+    """
+    value = None
+    
+    if request.is_json:
+        payload = request.get_json() or {}
+        value = payload.get(field_name)
+    elif request.form:
+        value = request.form.get(field_name)
+    
+    if value is None:
+        if required:
+            raise ValueError(f"Missing '{field_name}' field")
+        return None
+    
+    # Type conversion
+    try:
+        if field_type == int:
+            return int(value)
+        elif field_type == float:
+            return float(value)
+        else:
+            return str(value).strip()
+    except (ValueError, TypeError):
+        raise ValueError(f"Invalid value for '{field_name}': expected {field_type.__name__}")
+
+
+def _classify_violation(result: Dict[str, Any], flags: list) -> tuple[str, str]:
+    """
+    Classify violation type and severity based on detection result.
+    
+    Args:
+        result: Detection result from pipeline
+        flags: List of violation flags
+    
+    Returns:
+        Tuple of (violation_type, severity)
+    """
+    faces = result.get("faces", [])
+    objects = result.get("objects", [])
+    
+    # Critical: Suspicious objects detected
+    if objects:
+        return "suspicious_object", "critical"
+    
+    # Critical: Multiple faces
+    if len(faces) > 1:
+        return "multiple_faces", "critical"
+    
+    # Critical: No face detected
+    if len(faces) == 0:
+        return "no_face", "critical"
+    
+    # Critical: Unknown person (not registered)
+    if faces and faces[0].get("label") == "Unknown":
+        return "unknown_person", "critical"
+    
+    # Check for gaze/orientation violations
+    for flag in flags:
+        flag_lower = flag.lower()
+        
+        # High: Looking away
+        if "gaze" in flag_lower and "center" not in flag_lower:
+            return "looking_away", "high"
+        
+        # High: Head orientation
+        if "head orientation" in flag_lower or "looking" in flag_lower:
+            return "head_movement", "high"
+    
+    # Default: General violation
+    return "other_violation", "medium"
+
+
+def _calculate_confidence(result: Dict[str, Any]) -> float:
+    """
+    Calculate average confidence from detection result.
+    
+    Args:
+        result: Detection result from pipeline
+    
+    Returns:
+        Average confidence score (0.0-1.0)
+    """
+    confidences = []
+    
+    # Face recognition confidence
+    for face in result.get("faces", []):
+        conf = face.get("confidence")
+        if conf is not None:
+            confidences.append(float(conf))
+    
+    # Object detection confidence
+    for obj in result.get("objects", []):
+        conf = obj.get("confidence")
+        if conf is not None:
+            confidences.append(float(conf))
+    
+    if confidences:
+        return round(sum(confidences) / len(confidences), 2)
+    return 0.0
 
 
 def _extract_name() -> str:
