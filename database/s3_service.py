@@ -94,13 +94,13 @@ class S3Service:
                 s3_key,
                 ExtraArgs={
                     'ContentType': 'image/jpeg',
-                    'Metadata': {
-                        'exam_period_id': str(exam_period_id),
-                        'submission_id': str(submission_id),
-                        'user_id': str(user_id),
-                        'violation_type': violation_type,
-                        'uploaded_at': datetime.now().isoformat()
-                    }
+                    # 'Metadata': {
+                    #     'exam_period_id': str(exam_period_id),
+                    #     'submission_id': str(submission_id),
+                    #     'user_id': str(user_id),
+                    #     'violation_type': violation_type,
+                    #     'uploaded_at': datetime.now().isoformat()
+                    # }
                 }
             )
 

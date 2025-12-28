@@ -148,10 +148,10 @@ class MySQLService:
                     low_count = low_count + CASE WHEN %s = 'low' THEN 1 ELSE 0 END,
                     last_violation_at = %s,
                     risk_score = (
-                        (critical_count + CASE WHEN %s = 'critical' THEN 1 ELSE 0 END) * 25 +
-                        (high_count + CASE WHEN %s = 'high' THEN 1 ELSE 0 END) * 15 +
-                        (medium_count + CASE WHEN %s = 'medium' THEN 1 ELSE 0 END) * 8 +
-                        (low_count + CASE WHEN %s = 'low' THEN 1 ELSE 0 END) * 3
+                        (critical_count + CASE WHEN %s = 'critical' THEN 1 ELSE 0 END) * 50 +
+                        (high_count + CASE WHEN %s = 'high' THEN 1 ELSE 0 END) * 10 +
+                        (medium_count + CASE WHEN %s = 'medium' THEN 1 ELSE 0 END) * 10 +
+                        (low_count + CASE WHEN %s = 'low' THEN 1 ELSE 0 END) * 10
                     )
                 """
                 cursor.execute(sql, (

@@ -72,8 +72,7 @@ def detect() -> Any:
         )
     except ValueError as exc:
         LOGGER.warning("Failed to persist annotated image: %s", exc)
-
-    return jsonify(result)
+    return convert_numpy_to_json_serializable(result)
 
 
 def _extract_image_payload(payload: Dict[str, Any] | None = None):
@@ -126,7 +125,7 @@ def monitor_exam() -> Any:
             conn = mysql_service._get_connection()
             cursor = conn.cursor()
             
-            cursor.execute(
+            cursor.execute( 
                 "SELECT id FROM users WHERE employee_code = %s LIMIT 1",
                 (student_id,)
             )
@@ -135,7 +134,7 @@ def monitor_exam() -> Any:
             
             if not result:
                 return jsonify({
-                    "error": f"Student with employee_code '{student_id}' not found in system"
+                    "error": f"Học sinh với mã '{student_id}' không tìm thấy"
                 }), 404
             
             user_id = result['id']
@@ -182,6 +181,7 @@ def monitor_exam() -> Any:
                 user_id=user_id,
                 violation_type=violation_type
             )
+            print(f"Uploaded violation image to S3: {image_url} (key: {image_key})")
             
             # Remove annotated_image and convert numpy arrays to lists
             detection_data = {k: v for k, v in result.items() if k != "annotated_image"}
@@ -267,7 +267,7 @@ def register_student() -> Any:
         existing_name = PIPELINE.face_recognizer.database.find_by_student_id(student_id)
         if existing_name:
             return jsonify({
-                "error": f"Student ID '{student_id}' already registered under name '{existing_name}'"
+                "error": f"Học sinh có mã '{student_id}' đã được đăng ký với tên '{existing_name}'"
             }), 400
         
     except ValueError as exc:
@@ -275,10 +275,11 @@ def register_student() -> Any:
     
     images = _extract_images()
     if not images:
-        return jsonify({"error": "At least one image is required"}), 400
+        return jsonify({"error": "Yêu cầu tải lên ít nhất 1 ảnh"}), 400
     
     if len(images) < 3:
-        LOGGER.warning("Only %d images provided. Recommend at least 3 for better accuracy.", len(images))
+       return jsonify({"error": "Yêu cầu tải lên ít nhất 3 ảnh"}), 400
+
 
     try:
         summary = PIPELINE.face_recognizer.add_person(
@@ -291,7 +292,7 @@ def register_student() -> Any:
         return jsonify({"error": str(exc)}), 400
     except Exception:  # pragma: no cover - defensive
         LOGGER.exception("Failed to register student")
-        return jsonify({"error": "Internal error while registering student"}), 500
+        return jsonify({"error": "Lỗi khi thêm học sinh"}), 500
 
     summary["student_id"] = student_id
     summary["email"] = email
@@ -520,48 +521,52 @@ def _extract_field(field_name: str, required: bool = True, field_type: type = st
 
 def _classify_violation(result: Dict[str, Any], flags: list) -> tuple[str, str]:
     """
-    Classify violation type and severity based on detection result.
+    Phân loại loại vi phạm và mức độ nghiêm trọng dựa trên kết quả phát hiện.
     
     Args:
-        result: Detection result from pipeline
-        flags: List of violation flags
+        result: Kết quả phát hiện từ pipeline
+        flags: Danh sách cờ vi phạm
     
     Returns:
-        Tuple of (violation_type, severity)
+        Tuple của (loại_vi_phạm, mức_độ_nghiêm_trọng)
+        
+    Mức độ nghiêm trọng:
+        - critical: Nhiều khuôn mặt, Không có khuôn mặt, Người lạ
+        - medium: Tất cả các vi phạm khác (vật dụng, nhìn chỗ khác, cử động đầu)
     """
     faces = result.get("faces", [])
     objects = result.get("objects", [])
     
-    # Critical: Suspicious objects detected
-    if objects:
-        return "suspicious_object", "critical"
-    
-    # Critical: Multiple faces
+    # NGHIÊM TRỌNG: Nhiều khuôn mặt
     if len(faces) > 1:
-        return "multiple_faces", "critical"
+        return "Nhiều khuôn mặt trong khung hình", "critical"
     
-    # Critical: No face detected
+    # NGHIÊM TRỌNG: Không phát hiện khuôn mặt
     if len(faces) == 0:
-        return "no_face", "critical"
+        return "Không phát hiện khuôn mặt", "critical"
     
-    # Critical: Unknown person (not registered)
+    # NGHIÊM TRỌNG: Người lạ (chưa đăng ký)
     if faces and faces[0].get("label") == "Unknown":
-        return "unknown_person", "critical"
+        return "Phát hiện người lạ", "critical"
     
-    # Check for gaze/orientation violations
+    # KHÔNG NGHIÊM TRỌNG: Phát hiện vật dụng khả nghi
+    if objects:
+        return "Phát hiện vật dụng khả nghi", "medium"
+    
+    # KHÔNG NGHIÊM TRỌNG: Kiểm tra vi phạm về hướng nhìn/cử động đầu
     for flag in flags:
         flag_lower = flag.lower()
         
-        # High: Looking away
+        # Nhìn chỗ khác
         if "gaze" in flag_lower and "center" not in flag_lower:
-            return "looking_away", "high"
+            return "Nhìn sang chỗ khác", "medium"
         
-        # High: Head orientation
+        # Cử động đầu bất thường
         if "head orientation" in flag_lower or "looking" in flag_lower:
-            return "head_movement", "high"
+            return "Cử động đầu bất thường", "medium"
     
-    # Default: General violation
-    return "other_violation", "medium"
+    # Mặc định: Vi phạm khác
+    return "Vi phạm khác", "medium"
 
 
 def _calculate_confidence(result: Dict[str, Any]) -> float:
