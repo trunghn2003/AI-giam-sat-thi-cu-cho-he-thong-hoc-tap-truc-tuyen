@@ -51,9 +51,9 @@ class HeadPoseClassifier:
         if yaw >= t.yaw:
             return "Looking Right"
         if pitch >= t.pitch:
-            return "Looking Down"
-        if pitch <= -t.pitch:
             return "Looking Up"
+        if pitch <= -t.pitch:
+            return "Looking Down"
         if roll >= t.roll:
             return "Tilting Left"
         if roll <= -t.roll:

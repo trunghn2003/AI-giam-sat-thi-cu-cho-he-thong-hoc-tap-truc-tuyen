@@ -113,9 +113,9 @@ def _format_face_label(face: Dict[str, Any]) -> str:
     if confidence is not None:
         parts.append(f"{confidence:.2f}")
     if orientation and orientation != "Straight":
-        parts.append(orientation)
+        parts.append(f"Head: {orientation}")
     if gaze and gaze != "Center":
-        parts.append(gaze)
+        parts.append(f"Eye: {gaze}")
     return " | ".join(parts)
 
 

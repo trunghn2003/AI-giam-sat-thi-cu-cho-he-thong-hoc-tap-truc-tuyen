@@ -160,8 +160,12 @@ def monitor_exam() -> Any:
         detected_at = datetime.now()
         
         # Check if there are any violations
-        has_violation = result.get("status") != "clear"
-        flags = result.get("flags", [])
+        # has_violation = result.get("status") != "clear"
+        raw_flags = result.get("flags", [])
+        
+        # Tạm thời loại bỏ lỗi Gaze (hướng mắt)
+        flags = [f for f in raw_flags if "Gaze" not in f]
+        has_violation = len(flags) > 0
         
         if has_violation and flags:
             # Determine violation type and severity
@@ -558,11 +562,28 @@ def _classify_violation(result: Dict[str, Any], flags: list) -> tuple[str, str]:
         flag_lower = flag.lower()
         
         # Nhìn chỗ khác
+        # Nhìn chỗ khác (Gaze)
         if "gaze" in flag_lower and "center" not in flag_lower:
-            return "Nhìn sang chỗ khác", "medium"
+            if "looking up" in flag_lower:
+                return "Mắt nhìn lên", "medium"
+            if "looking down" in flag_lower:
+                return "Mắt nhìn xuống", "medium"
+            if "looking left" in flag_lower:
+                return "Mắt nhìn trái", "medium"
+            if "looking right" in flag_lower:
+                return "Mắt nhìn phải", "medium"
+            return "Mắt nhìn sang chỗ khác", "medium"
         
-        # Cử động đầu bất thường
-        if "head orientation" in flag_lower or "looking" in flag_lower:
+        # Cử động đầu bất thường (Head Pose)
+        if "head orientation" in flag_lower:
+            if "looking up" in flag_lower:
+                return "Đầu ngẩng lên", "medium"
+            if "looking down" in flag_lower:
+                return "Đầu cúi xuống", "medium"
+            if "looking left" in flag_lower:
+                return "Đầu quay trái", "medium"
+            if "looking right" in flag_lower:
+                return "Đầu quay phải", "medium"
             return "Cử động đầu bất thường", "medium"
     
     # Mặc định: Vi phạm khác

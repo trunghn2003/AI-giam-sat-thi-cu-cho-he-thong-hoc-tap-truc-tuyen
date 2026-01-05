@@ -154,15 +154,39 @@ def _classify_gaze(coords: np.ndarray) -> GazeEstimate:
     except Exception as exc:
         raise ValueError(f"Failed to compute gaze ratios: {exc}") from exc
 
+    # Calculate Eye Openness (Height-to-Width Ratio)
+    try:
+        # Left Eye Dimensions
+        l_width = np.linalg.norm(coords[LEFT_EYE_CORNERS[1]] - coords[LEFT_EYE_CORNERS[0]])
+        l_height = np.linalg.norm(coords[LEFT_EYE_LIDS[1]] - coords[LEFT_EYE_LIDS[0]])
+        
+        # Right Eye Dimensions
+        r_width = np.linalg.norm(coords[RIGHT_EYE_CORNERS[1]] - coords[RIGHT_EYE_CORNERS[0]])
+        r_height = np.linalg.norm(coords[RIGHT_EYE_LIDS[1]] - coords[RIGHT_EYE_LIDS[0]])
+        
+        # Avoid division by zero
+        l_ratio = l_height / l_width if l_width > 1e-6 else 0
+        r_ratio = r_height / r_width if r_width > 1e-6 else 0
+        
+        avg_openness = (l_ratio + r_ratio) / 2.0
+        
+        # If eyes are too closed (squinting, blinking, or looking down heavily), skip vertical gaze check
+        # This prevents false "Looking Up" when eyes are barely visible
+        eye_too_closed = avg_openness < 0.18
+
+    except Exception:
+        eye_too_closed = False
+
     direction = "Center"
     if horizontal_ratio < 0.35:
         direction = "Looking Left"
     elif horizontal_ratio > 0.65:
         direction = "Looking Right"
-    elif vertical_ratio < 0.35:
-        direction = "Looking Up"
-    elif vertical_ratio > 0.65:
-        direction = "Looking Down"
+    elif not eye_too_closed:
+        if vertical_ratio < 0.15:
+            direction = "Looking Up"
+        elif vertical_ratio > 0.65:
+            direction = "Looking Down"
 
     return GazeEstimate(direction, horizontal_ratio, vertical_ratio)
 
