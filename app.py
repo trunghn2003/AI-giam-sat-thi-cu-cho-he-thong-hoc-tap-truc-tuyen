@@ -531,8 +531,8 @@ def _classify_violation(result: Dict[str, Any], flags: list) -> tuple[str, str]:
         Tuple của (loại_vi_phạm, mức_độ_nghiêm_trọng)
         
     Mức độ nghiêm trọng:
-        - critical: Nhiều khuôn mặt, Không có khuôn mặt, Người lạ
-        - medium: Tất cả các vi phạm khác (vật dụng, nhìn chỗ khác, cử động đầu)
+        - critical: Nhiều khuôn mặt, Không có khuôn mặt, Người lạ, Vật dụng khả nghi
+        - medium: Các vi phạm khác (nhìn chỗ khác, cử động đầu)
     """
     faces = result.get("faces", [])
     objects = result.get("objects", [])
@@ -549,9 +549,9 @@ def _classify_violation(result: Dict[str, Any], flags: list) -> tuple[str, str]:
     if faces and faces[0].get("label") == "Unknown":
         return "Phát hiện người lạ", "critical"
     
-    # KHÔNG NGHIÊM TRỌNG: Phát hiện vật dụng khả nghi
+    # NGHIÊM TRỌNG: Phát hiện vật dụng khả nghi
     if objects:
-        return "Phát hiện vật dụng khả nghi", "medium"
+        return "Phát hiện vật dụng khả nghi", "critical"
     
     # KHÔNG NGHIÊM TRỌNG: Kiểm tra vi phạm về hướng nhìn/cử động đầu
     for flag in flags:

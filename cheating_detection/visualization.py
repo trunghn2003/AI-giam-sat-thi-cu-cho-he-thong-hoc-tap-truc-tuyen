@@ -65,11 +65,29 @@ def _draw_label(
 ) -> None:
     font = cv2.FONT_HERSHEY_SIMPLEX
     text_size, baseline = cv2.getTextSize(text, font, font_scale, thickness)
+    text_w, text_h = text_size
+    
+    img_h, img_w = image.shape[:2]
     x, y = origin
-    y = max(text_size[1], y)
+
+    # Adjust x to keep text within image width
+    if x + text_w > img_w:
+        x = img_w - text_w
+    x = max(0, x)
+
+    # Adjust y to keep text within image height
+    # If the text block goes above the image (y - text_h - baseline < 0)
+    # Move it down (e.g., inside the bounding box)
+    if y - text_h - baseline < 0:
+        y = text_h + baseline + 5
+    
+    # Check if it goes off bottom (unlikely for top labels but good practice)
+    if y + baseline > img_h:
+        y = img_h - baseline
+
     cv2.rectangle(
         image,
-        (x, y - text_size[1] - baseline),
+        (x, y - text_h - baseline),
         (x + text_size[0], y + baseline),
         color,
         cv2.FILLED,
