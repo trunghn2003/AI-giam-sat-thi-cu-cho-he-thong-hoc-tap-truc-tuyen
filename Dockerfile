@@ -4,6 +4,9 @@ FROM python:3.10-slim
 # Thiết lập thư mục làm việc
 WORKDIR /app
 
+# Thiết lập Timezone mặc định là Việt Nam
+ENV TZ=Asia/Ho_Chi_Minh
+
 # Cài đặt các thư viện hệ thống cần thiết cho OpenCV và InsightFace
 RUN apt-get update && apt-get install -y \
     build-essential \
@@ -13,6 +16,7 @@ RUN apt-get update && apt-get install -y \
     libxext6 \
     libxrender-dev \
     libglib2.0-0 \
+    tzdata \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy file requirements.txt vào container
