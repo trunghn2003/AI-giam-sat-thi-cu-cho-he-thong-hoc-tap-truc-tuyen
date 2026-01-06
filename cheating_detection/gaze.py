@@ -184,9 +184,9 @@ def _classify_gaze(coords: np.ndarray) -> GazeEstimate:
         direction = "Looking Right"
     elif not eye_too_closed:
         if vertical_ratio < 0.15:
-            direction = "Looking Up"
-        elif vertical_ratio > 0.65:
             direction = "Looking Down"
+        elif vertical_ratio > 0.65:
+            direction = "Looking Up"
 
     return GazeEstimate(direction, horizontal_ratio, vertical_ratio)
 

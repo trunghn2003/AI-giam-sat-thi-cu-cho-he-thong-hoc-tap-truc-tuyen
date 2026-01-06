@@ -160,12 +160,8 @@ def monitor_exam() -> Any:
         detected_at = datetime.now()
         
         # Check if there are any violations
-        # has_violation = result.get("status") != "clear"
-        raw_flags = result.get("flags", [])
-        
-        # Tạm thời loại bỏ lỗi Gaze (hướng mắt)
-        flags = [f for f in raw_flags if "Gaze" not in f]
-        has_violation = len(flags) > 0
+        has_violation = result.get("status") != "clear"
+        flags = result.get("flags", [])
         
         if has_violation and flags:
             # Determine violation type and severity
